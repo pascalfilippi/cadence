@@ -1,0 +1,15 @@
+cosign.key
+*.key
+
+output/
+_build*/
+previous.manifest.json
+changelog.md
+output.env
+
+.DS_Store
+*.swp
+
+.claude
+.idea
+*.iml
