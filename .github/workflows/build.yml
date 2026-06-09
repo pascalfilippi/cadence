@@ -142,7 +142,7 @@ jobs:
       - name: Prepare build args file
         run: |
           cat <<'EOF' >>build_args.txt
-          BASE_IMAGE=ghcr.io/${{ env.SOURCE_ORG }}/${{ matrix.base }}:${{ env.IMAGE_SOURCE_TAG || 'latest' }}
+          BASE_IMAGE=ghcr.io/${{ env.SOURCE_ORG }}/${{ env.BASE_IMAGE }}:${{ env.IMAGE_SOURCE_TAG || 'latest' }}
           IMAGE_NAME=${{ env.IMAGE_NAME }}
           IMAGE_VENDOR=${{ github.repository_owner }}
           EOF
