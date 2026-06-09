@@ -99,6 +99,44 @@ jobs:
           sep-tags: " "
           sep-annotations: " "
 
+      # OUTPUTS:
+      #   - SOURCE_VERSION: version of the source image. Ex.: testing-41.20250312
+      #   - SOURCE_VERSION_MAJOR: major version. Used to identify big releases. Ex.: 41
+      - name: Get image major version
+        id: fetch_source_meta
+        env:
+          org: ${{ env.SOURCE_ORG }}
+          IMAGE_SOURCE_TAG: ${{ env.IMAGE_SOURCE_TAG || 'latest' }}
+        run: |
+          set -x
+          # SOURCE_VERSION_MAJOR must be a number
+          declare -i SOURCE_VERSION_MAJOR=0
+
+          # There are some ways to get the major release from an image.
+          # First method: `skopeo inspect` and annotations.
+
+          SOURCE_VERSION=$(
+                skopeo inspect --no-tags --raw --config \
+                "docker://ghcr.io/${org}/${BASE_IMAGE}:${IMAGE_SOURCE_TAG}" | \
+                jq -r '.config.Labels["org.opencontainers.image.version"]'
+          )
+          if [[ -z $SOURCE_VERSION ]]; then
+            echo "::error::$SOURCE_VERSION was not fetched correctly: $SOURCE_VERSION=${$SOURCE_VERSION}"
+            exit 1
+          fi
+          echo "SOURCE_VERSION=$SOURCE_VERSION" >>$GITHUB_OUTPUT
+
+          SOURCE_VERSION_MAJOR=$([[ ${SOURCE_VERSION} =~ ^(.*-)?([[:digit:]]+) ]] && echo "${BASH_REMATCH[-1]}")
+          _status=$?
+          unset -v _tag
+
+          if [[ $_status -ne 0 ]] || [[ -z ${SOURCE_VERSION_MAJOR} ]] || (( SOURCE_VERSION_MAJOR <= 0 )); then
+            echo "::error::SOURCE_VERSION_MAJOR was not fetched correctly: SOURCE_VERSION_MAJOR=${SOURCE_VERSION_MAJOR}"
+            exit 1
+          fi
+
+          echo "SOURCE_VERSION_MAJOR=$SOURCE_VERSION_MAJOR" >>$GITHUB_OUTPUT
+
       - name: Build Image
         id: build_image
         uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
@@ -112,44 +150,77 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}
 
-      # Extract the Fedora major version (44, 45, …) from the just-built image's
-      # /etc/os-release. Used as the rechunker `version:` input below.
-      - name: Extract Fedora version
-        id: fedora_version
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      - name: Apply Labels
+        id: relabel
+        env:
+          IMAGE_LABELS: |
+            io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/refs/heads/main/README.md
+            org.opencontainers.image.description=${{ env.IMAGE_DESC }}
+            org.opencontainers.image.documentation=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/refs/heads/main/README.md
+            org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/blob/main/Containerfile
+            org.opencontainers.image.title=${{ env.IMAGE_NAME }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            io.artifacthub.package.deprecated=false
+            io.artifacthub.package.keywords=bootc,ublue,universal-blue
+            io.artifacthub.package.license=Apache-2.0
+            io.artifacthub.package.logo-url=${{ env.ARTIFACTHUB_LOGO_URL }}
+            io.artifacthub.package.prerelease=false
+            containers.bootc=1
         run: |
-          VERSION=$(podman run --rm --entrypoint= \
-            localhost/${IMAGE_NAME}:${DEFAULT_TAG} \
-            bash -c '. /etc/os-release && echo "$VERSION_ID"')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          version="${{ steps.fetch_source_meta.outputs.SOURCE_VERSION_MAJOR }}.$(date +%Y%m%d)"
 
-      # Rechunk the image into many small content-grouped layers with clamped
-      # timestamps, so subscribers only download changed layers on update.
-      # https://github.com/hhd-dev/rechunk
+          # Figure out config
+          mapfile -t labels <<< "$IMAGE_LABELS"
+          labels+=(
+            "org.opencontainers.image.version=$version"
+            "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          )
+
+          # Apply config to labels and annotations
+          container=$(sudo buildah from raw-img)
+          for line in "${labels[@]}"; do
+            [ -z "$line" ] && continue
+            sudo buildah config --label "$line" --annotation "$line" "$container"
+          done
+          sudo buildah commit --identity-label=false --rm $container raw-img
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Reprocess raw-img using rechunker which will delete it
       - name: Run Rechunker
         id: rechunk
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        uses: ublue-os/legacy-rechunk@a925083d9af7cb04b3e2a6e8c01bfa495f38b710 # v1.0.0
-        with:
-          rechunk: 'ghcr.io/ublue-os/legacy-rechunk:v1.0.0-x86_64'
-          ref: "localhost/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}"
-          prev-ref: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}"
-          skip_compression: true
-          version: ${{ steps.fedora_version.outputs.version }}
-          # Rechunker strips OCI labels; re-apply from the metadata-action output.
-          labels: ${{ steps.metadata.outputs.labels }}
-
-      # Load the rechunked image back into podman storage and re-apply every
-      # tag the push step expects, so the rechunked image (not the original)
-      # is what actually gets pushed.
-      - name: Load rechunked image in podman and re-tag
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
-          IMAGE=$(podman pull ${{ steps.rechunk.outputs.ref }})
-          sudo rm -rf ${{ steps.rechunk.outputs.output }}
-          for tag in ${{ steps.metadata.outputs.tags }}; do
-            podman tag $IMAGE ${{ env.IMAGE_NAME }}:$tag
+          container=$(sudo buildah from raw-img)
+          mnt=$(sudo buildah mount $container)
+          sudo bash -c "rm -rf $mnt/run/.* $mnt/run/* $mnt/tmp/.* $mnt/tmp/*"
+          sudo buildah umount $container
+          sudo buildah commit --identity-label=false --rm $container raw-img
+
+          sudo podman run --rm --privileged --volume /var/lib/containers:/var/lib/containers \
+              localhost/raw-img \
+              rpm-ostree compose build-chunked-oci \
+              --bootc --max-layers 127 --format-version 2 \
+              --from localhost/raw-img --output containers-storage:localhost/chunked-img
+          sudo podman untag raw-img
+
+          echo "ref=containers-storage:localhost/chunked-img" >> "$GITHUB_OUTPUT"
+
+      # Generate tags after relabel runs
+      - name: Generate tags
+        id: generate-tags
+        shell: bash
+        run: |
+          # Common vars for generating tags
+          VERSION_TAG="${{ steps.relabel.outputs.version }}"
+
+          BUILD_TAGS=("stable-${VERSION_TAG}" "latest" "stable" "stable-${{ steps.fetch_source_meta.outputs.SOURCE_VERSION_MAJOR }}")
+
+          echo "Generated the following build tags: "
+          for TAG in "${BUILD_TAGS[@]}"; do
+              echo "${TAG}"
           done
+          echo "alias_tags=${BUILD_TAGS[*]}" >> $GITHUB_OUTPUT
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
