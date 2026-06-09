@@ -17,7 +17,8 @@ rpm -q pipewire-jack-audio-connection-kit wireplumber
 
 # ---------- Overlay our system files ----------
 # Includes: bootc kargs.d, sysusers.d, /etc PipeWire/WirePlumber/limits/sysctl
-# drop-ins, and /usr/share/ublue-os/just/60-audio.just.
+# drop-ins, and /usr/share/ublue-os/just/60-custom.just (audio recipes —
+# Aurora's 00-entry.just only auto-imports the `60-custom.just` filename).
 cp -r /ctx/system_files/. /
 
 # Process sysusers.d at build time so the `realtime` group is baked into the
