@@ -17,6 +17,7 @@ env:
   IMAGE_LOGO_URL: "https://avatars.githubusercontent.com/u/120078124?s=200&v=4"
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
+  SOURCE_ORG: "ublue-os"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
@@ -46,7 +47,7 @@ jobs:
       IMAGE_NAME: "cadence${{ matrix.variant.suffix }}"
       IMAGE_DESC: "${{ matrix.variant.desc }}"
       IMAGE_KEYWORDS: "${{ matrix.variant.keywords }}"
-      BASE_IMAGE: "ghcr.io/ublue-os/${{ matrix.variant.base }}:stable"
+      BASE_IMAGE: ${{ matrix.variant.base }}
 
     permissions:
       contents: read
@@ -137,18 +138,22 @@ jobs:
 
           echo "SOURCE_VERSION_MAJOR=$SOURCE_VERSION_MAJOR" >>$GITHUB_OUTPUT
 
+      # Generate a file with all the build-args passed to buildah
+      - name: Prepare build args file
+        run: |
+          cat <<'EOF' >>build_args.txt
+          BASE_IMAGE=ghcr.io/${{ env.SOURCE_ORG }}/${{ matrix.base_image }}:${{ env.IMAGE_SOURCE_TAG || 'latest' }}
+          IMAGE_NAME=${{ env.IMAGE_NAME }}
+          IMAGE_VENDOR=${{ github.repository_owner }}
+          EOF
+
+      # Build image using buildah and save it to raw-img
       - name: Build Image
         id: build_image
-        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
-        with:
-          containerfiles: |
-            ./Containerfile
-          image: ${{ env.IMAGE_NAME }}
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          oci: false
-          build-args: |
-            BASE_IMAGE=${{ env.BASE_IMAGE }}
+        run: |
+          sudo -E buildah build \
+            --build-arg-file build_args.txt \
+            --tag raw-img .
 
       - name: Apply Labels
         id: relabel
