@@ -53,10 +53,7 @@ audio-install-cachyos:
     sudo dnf5 -y copr enable bieszczaders/kernel-cachyos
     sudo rpm-ostree override remove \
         kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra \
-        --install kernel-cachyos \
-        --install kernel-cachyos-core \
-        --install kernel-cachyos-modules \
-        --install kernel-cachyos-modules-core
+        --install kernel-cachyos
     @echo "Reboot to apply."
 
 # Opt-in: swap the stock kernel for kernel-cachyos-rt (PREEMPT_RT).
@@ -74,8 +71,5 @@ audio-install-cachyos-rt:
     sudo dnf5 -y copr enable bieszczaders/kernel-cachyos
     sudo rpm-ostree override remove \
         kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra \
-        --install kernel-cachyos-rt \
-        --install kernel-cachyos-rt-core \
-        --install kernel-cachyos-rt-modules \
-        --install kernel-cachyos-rt-modules-core
+        --install kernel-cachyos-rt
     @echo "Reboot to apply."
