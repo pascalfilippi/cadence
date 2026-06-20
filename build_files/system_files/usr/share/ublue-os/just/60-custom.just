@@ -6,11 +6,26 @@
 [group('Audio')]
 audio-rt-check:
     #!/usr/bin/env bash
+    set -euo pipefail
+    # rtcqs only looks for the kernel config at /proc/config.gz or
+    # /boot/config-$(uname -r). On atomic Fedora/Aurora neither exists: the Fedora
+    # kernel is built with CONFIG_IKCONFIG off (no /proc/config.gz), and ostree keeps
+    # the config at /usr/lib/modules/<rel>/config instead of populating /boot. When
+    # rtcqs can't find it, it not only skips the kernel checks but crashes
+    # (KeyError on self.kernel["config"] in high_res_timers_check). Restore the
+    # conventional /boot path as a symlink so the kernel checks run. Done at runtime
+    # so it tracks the running kernel even after an `audio-install-cachyos*` swap.
+    rel="$(uname -r)"
+    cfg="/usr/lib/modules/${rel}/config"
+    if [[ -r "$cfg" && ! -e "/boot/config-${rel}" ]]; then
+        echo "Linking kernel config into /boot so rtcqs can read it (needs sudo, one-time)…"
+        sudo ln -sf "$cfg" "/boot/config-${rel}"
+    fi
     if ! command -v rtcqs >/dev/null 2>&1; then
         echo "rtcqs not installed — fetching via pipx (one-time)..."
         pipx install rtcqs
-        export PATH="$HOME/.local/bin:$PATH"
     fi
+    export PATH="$HOME/.local/bin:$PATH"
     rtcqs
 
 # Force the PipeWire quantum (buffer size) at runtime. Lower = lower latency, higher CPU.
@@ -35,6 +50,52 @@ audio-join-realtime-group:
     sudo gpasswd -a "$USER" realtime
     @echo "Done. Log out and back in for RT limits to take effect."
     @echo "Verify with: ulimit -r  (expect 95)"
+
+# Toggle SMT / hyper-threading at runtime. Disabling halves logical cores but can
+# remove the DSP-load spikes rtcqs warns about under heavy realtime audio. This is
+# NOT persistent — it resets to the firmware default on reboot. Leave it on for
+# gaming; flip it off for a low-latency session if you hit xruns.
+# Usage: `ujust audio-smt on|off|status`  (no argument shows current state)
+[group('Audio')]
+audio-smt action="status":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ action }}" in
+        on|off)
+            echo "{{ action }}" | sudo tee /sys/devices/system/cpu/smt/control >/dev/null
+            echo "SMT set to '{{ action }}'." ;;
+        status) ;;
+        *)
+            echo "Usage: ujust audio-smt on|off|status" >&2
+            exit 1 ;;
+    esac
+    echo "control: $(cat /sys/devices/system/cpu/smt/control)"
+    echo "active:  $(cat /sys/devices/system/cpu/smt/active)  (1 = SMT active, 0 = disabled)"
+
+# Pin the CPU to a deterministic, low-latency state for playing/recording.
+# Aurora manages CPU frequency scaling through tuned (the KDE energy widget drives
+# it via tuned-ppd) — NOT power-profiles-daemon or raw cpupower, so rtcqs's
+# `cpupower frequency-set -g performance` tip won't stick: tuned re-asserts its
+# profile. The correct lever is the tuned profile. This selects `latency-performance`
+# (governor=performance, EPP=performance, min_perf_pct=100, capped CPU C-states and
+# vm.swappiness=10). It also overwrites any stale active profile, so it doubles as the
+# fix if the KDE "Performance" setting isn't taking effect. Reverse with audio-cpu-balanced.
+[group('Audio')]
+audio-cpu-performance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo tuned-adm profile latency-performance
+    echo "Active profile: $(tuned-adm active | cut -d: -f2- | xargs)"
+    echo "Governor now:   $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+
+# Hand CPU frequency scaling back to the balanced default (and to the KDE energy
+# widget / tuned-ppd). Use this after a session to restore normal power management.
+[group('Audio')]
+audio-cpu-balanced:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo tuned-adm profile balanced
+    echo "Active profile: $(tuned-adm active | cut -d: -f2- | xargs)"
 
 # Opt-in: swap the stock kernel for kernel-cachyos (BORE+EEVDF, PREEMPT_DYNAMIC).
 # Better desktop responsiveness under load. Not real-time — for that use the
