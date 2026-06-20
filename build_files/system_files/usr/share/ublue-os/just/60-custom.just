@@ -1,33 +1,6 @@
 # Audio recipes for cadence — low-latency PipeWire helpers
 # Invoke with `ujust audio-<recipe>`
 
-# Run the realtime config diagnostic (rtcqs). Installs it via pipx on first use
-# since it's not packaged as an RPM in Audinux.
-[group('Audio')]
-audio-rt-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # rtcqs only looks for the kernel config at /proc/config.gz or
-    # /boot/config-$(uname -r). On atomic Fedora/Aurora neither exists: the Fedora
-    # kernel is built with CONFIG_IKCONFIG off (no /proc/config.gz), and ostree keeps
-    # the config at /usr/lib/modules/<rel>/config instead of populating /boot. When
-    # rtcqs can't find it, it not only skips the kernel checks but crashes
-    # (KeyError on self.kernel["config"] in high_res_timers_check). Restore the
-    # conventional /boot path as a symlink so the kernel checks run. Done at runtime
-    # so it tracks the running kernel even after an `audio-install-cachyos*` swap.
-    rel="$(uname -r)"
-    cfg="/usr/lib/modules/${rel}/config"
-    if [[ -r "$cfg" && ! -e "/boot/config-${rel}" ]]; then
-        echo "Linking kernel config into /boot so rtcqs can read it (needs sudo, one-time)…"
-        sudo ln -sf "$cfg" "/boot/config-${rel}"
-    fi
-    if ! command -v rtcqs >/dev/null 2>&1; then
-        echo "rtcqs not installed — fetching via pipx (one-time)..."
-        pipx install rtcqs
-    fi
-    export PATH="$HOME/.local/bin:$PATH"
-    rtcqs
-
 # Force the PipeWire quantum (buffer size) at runtime. Lower = lower latency, higher CPU.
 # Example: `ujust audio-set-quantum 128`
 [group('Audio')]

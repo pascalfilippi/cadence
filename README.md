@@ -91,7 +91,6 @@ Both prompt before making changes and require a reboot.
 
 - `ujust audio-set-quantum 128` — drop the PipeWire quantum to 128 samples (≈2.7 ms at 48 kHz) for guitar monitoring. Use higher (256/512) for mixing.
 - `ujust audio-reset-quantum` — reset to the file defaults.
-- `ujust audio-rt-check` — run `rtcqs`.
 - `ujust audio-cpu-performance` — pin the CPU low-latency for a session via tuned's `latency-performance` profile (governor=performance, capped C-states). `ujust audio-cpu-balanced` restores the default. Aurora drives cpufreq through tuned/tuned-ppd (the KDE energy widget), so use these rather than `cpupower` — a manual governor change gets overridden by tuned.
 - `ujust audio-smt off` — disable SMT/hyper-threading for the current boot to remove DSP-load spikes; `ujust audio-smt on` re-enables it, `ujust audio-smt status` shows state. Not persistent across reboots.
 - `ujust audio-install-reaper` — set up REAPER in user home directory.
