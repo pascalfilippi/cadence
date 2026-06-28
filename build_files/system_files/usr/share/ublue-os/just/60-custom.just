@@ -70,6 +70,57 @@ audio-cpu-balanced:
     sudo tuned-adm profile balanced
     echo "Active profile: $(tuned-adm active | cut -d: -f2- | xargs)"
 
+# Download and install the latest REAPER (Cockos) into your home directory.
+# REAPER is proprietary and ships its own frequent updates, so it's deliberately
+# kept out of the image. This pulls the current Linux x86_64 build straight from
+# reaper.fm, installs it under ~/.local/opt/REAPER, adds an app-menu launcher and a
+# ~/.local/bin/reaper symlink. No sudo and no rpm-ostree layering, so it survives
+# image rebases. Re-run any time to upgrade to the newest release.
+[group('Audio')]
+audio-install-reaper:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="https://www.reaper.fm"
+    prefix="$HOME/.local/opt"
+
+    echo "Finding the latest REAPER release..."
+    relpath="$(curl -fsSL "$base/download.php" \
+        | grep -oE 'files/[0-9]+\.x/reaper[0-9]+_linux_x86_64\.tar\.xz' \
+        | head -n1)"
+    if [[ -z "${relpath:-}" ]]; then
+        echo "Could not determine the latest REAPER version from $base/download.php" >&2
+        exit 1
+    fi
+    tarball="${relpath##*/}"
+    echo "Latest build: $tarball"
+
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+
+    echo "Downloading..."
+    curl -fSL --progress-bar "$base/$relpath" -o "$tmp/$tarball"
+    xz -t "$tmp/$tarball"                       # sanity-check the archive
+    tar -xf "$tmp/$tarball" -C "$tmp"
+
+    installer="$(find "$tmp" -name install-reaper.sh -type f | head -n1)"
+    if [[ -z "${installer:-}" ]]; then
+        echo "install-reaper.sh not found in the downloaded archive." >&2
+        exit 1
+    fi
+
+    mkdir -p "$prefix"
+    echo "Installing to $prefix/REAPER ..."
+    bash "$installer" --install "$prefix" --integrate-desktop --quiet
+
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$prefix/REAPER/reaper" "$HOME/.local/bin/reaper"
+
+    echo ""
+    echo "REAPER installed under $prefix/REAPER."
+    echo "Launch it from the app menu, or run 'reaper' (needs ~/.local/bin on PATH)."
+    echo "Upgrade later by re-running 'ujust audio-install-reaper'."
+    echo "Uninstall with: $prefix/REAPER/uninstall-reaper.sh"
+
 # Opt-in: swap the stock kernel for kernel-cachyos (BORE+EEVDF, PREEMPT_DYNAMIC).
 # Better desktop responsiveness under load. Not real-time — for that use the
 # `audio-install-cachyos-rt` recipe instead. Requires x86-64-v3 CPU.
